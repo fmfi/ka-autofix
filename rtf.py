@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import re
 from copy import copy
 from collections import deque
-from itertools import chain
 
 
 class Error(Exception):
@@ -88,6 +88,10 @@ class ControlWord(Token):
         ret += self.trailing
         return ret
 
+    def __repr__(self):
+        return 'ControlWord({!r}, number={!r}, trailing={!r}, pos={!r})'.format(self.word, self.number,
+                                                                                self.trailing, self.pos)
+
 
 class BinaryData(Token):
     def __init__(self, data, pos=None, trailing=None):
@@ -112,6 +116,9 @@ class ControlSymbol(Token):
     def __bytes__(self):
         return b'\\' + self.symbol
 
+    def __repr__(self):
+        return 'ControlSymbol({!r}, pos={!r})'.format(self.symbol, self.pos)
+
 
 class Separator(Token):
     def __init__(self, bytes, pos=None):
@@ -121,11 +128,17 @@ class Separator(Token):
     def __bytes__(self):
         return self.bytes
 
+    def __repr__(self):
+        return 'Separator({!r}, pos={!r})'.format(self.bytes, self.pos)
+
 
 class Char(Token):
     def __init__(self, ordinal, pos=None):
         super().__init__(pos=pos)
         self.ordinal = ordinal
+
+    def __repr__(self):
+        return '{}({!r}, pos={!r})'.format(self.__class__.__name__, self.ordinal, self.pos)
 
 
 class RawChar(Char):
@@ -151,6 +164,9 @@ class GroupBoundary(Token):
 
     def __eq__(self, other):
         return isinstance(other, GroupBoundary) and self.opening == other.opening
+
+    def __ne__(self, other):
+        return not (self == other)
 
 
 def tokenize(bs):
@@ -180,7 +196,7 @@ def tokenize(bs):
                     if num > 32:
                         raise ParseError(bs.pos, 'Too long control word')
                 number = None
-                if bs.peek() == ' ':
+                if bs.peek() == b' ':
                     trailing = bs.get()
                 elif b'0' <= bs.peek() <= b'9' or bs.peek() == b'-':
                     number = bs.get()
@@ -206,17 +222,25 @@ def tokenize(bs):
             else:
                 yield ControlSymbol(bs.get(), pos=loop_pos)
         elif b == b'\r' or b == b'\n':
-            yield Separator(bs.get(), pos=loop_pos)
+            sep = bs.get()
+            if (b == b'\r' and bs.peek() == b'\n') or (b == b'\n' and bs.peek() == b'\r'):
+                sep += bs.get()
+            yield Separator(sep, pos=loop_pos)
         else:
             yield RawChar(ord(bs.get().decode('ascii')), pos=loop_pos)
 
 
 class Node:
-    pass
+    def __init__(self, parent=None):
+        self.parent = parent
+
+    def walk(self):
+        yield self
 
 
 class Text(Node):
-    def __init__(self, text, tokens=None):
+    def __init__(self, text, tokens=None, parent=None):
+        super().__init__(parent=parent)
         self.tokens = tokens
         self._text = text
 
@@ -234,19 +258,39 @@ class Text(Node):
         self._text += text
         self.tokens.extend(tokens)
 
+    def __repr__(self):
+        return 'Text({!r}, tokens={!r})'.format(self._text, self.tokens)
+
 
 class Group(Node):
-    def __init__(self, pos=None):
+    def __init__(self, pos=None, parent=None):
+        super().__init__(parent=parent)
         self.content = []
         self.pos = pos
 
     def __bytes__(self):
         return b'{' + b''.join(bytes(x) for x in self.content) + b'}'
 
+    def walk(self):
+        yield self
+        for child in self.content:
+            for node in child.walk():
+                yield node
+
+    def append(self, node):
+        if node.parent is not None:
+            raise ValueError('A node can only be inserted once')
+        node.parent = self
+        self.content.append(node)
+
 
 class TokenNode(Node):
-    def __init__(self, token):
+    def __init__(self, token, parent=None):
+        super().__init__(parent=parent)
         self.token = token
+
+    def __repr__(self):
+        return 'TokenNode({!r})'.format(self.token)
 
 
 class Scope:
@@ -267,8 +311,12 @@ RTF_ENCODINGS = {
 
 class Document(Node):
     def __init__(self, root, trailing=None):
+        super().__init__(parent=None)
         self.root = root
         self.trailing = trailing
+
+    def walk(self):
+        return self.root.walk()
 
 
 def parse(tokens, encoding=None):
@@ -292,14 +340,14 @@ def parse(tokens, encoding=None):
             text_node = stack[-1].group.content[-1]
         else:
             text_node = Text('', [])
-            stack[-1].group.content.append(text_node)
+            stack[-1].group.append(text_node)
         text_node.append(text, tokens)
 
     for token in tokens:
         if token == GroupBoundary(opening=True):
             new_scope = copy(stack[-1])
             new_scope.group = Group(token.pos)
-            stack[-1].group.content.append(new_scope.group)
+            stack[-1].group.append(new_scope.group)
             stack.append(new_scope)
         elif token == GroupBoundary(opening=False):
             stack.pop()
@@ -309,7 +357,7 @@ def parse(tokens, encoding=None):
             try:
                 decoded_text = bytes([token.ordinal]).decode(effective_encoding)
             except UnicodeDecodeError:
-                stack[-1].group.content.append(TokenNode(token))
+                stack[-1].group.append(TokenNode(token))
             else:
                 combine_text(decoded_text, [token])
         elif isinstance(token, ControlWord):
@@ -340,9 +388,9 @@ def parse(tokens, encoding=None):
                     set_encoding(RTF_ENCODINGS[token.number])
                 else:
                     set_encoding('cp{}'.format(token.number))
-            stack[-1].group.content.append(TokenNode(token))
+            stack[-1].group.append(TokenNode(token))
         else:
-            stack[-1].group.content.append(TokenNode(token))
+            stack[-1].group.append(TokenNode(token))
 
     trailing = []
     for token in tokens:
@@ -408,6 +456,111 @@ def flatten(node, encoding=None):
             for token in node.trailing:
                 yield token
 
+
+def find_text(root, text):
+    for node in root.walk():
+        if isinstance(node, Text):
+            if text in node.text:
+                yield node
+
+
+def find_re(root, pattern):
+    if isinstance(pattern, str):
+        pattern = re.compile(pattern)
+    for node in root.walk():
+        if isinstance(node, Text):
+            m = pattern.match(node.text)
+            if m:
+                yield node, m
+
+
+def dfs_rtl(node, include_root=True):
+    if include_root:
+        yield node
+    if isinstance(node, Group):
+        for child in reversed(node.content):
+            for child_node in dfs_rtl(child, include_root=True):
+                yield child_node
+
+
+def dfs_ltr(node, include_root=True):
+    if include_root:
+        yield node
+    if isinstance(node, Group):
+        for child in node.content:
+            for child_node in dfs_ltr(child, include_root=True):
+                yield child_node
+
+
+def walk_left(node):
+    """Generates nodes towards beginning of the document, starting before node"""
+    if node.parent is None or not isinstance(node.parent, Group):
+        return
+
+    # Find the current node's position
+    for index, index_node in enumerate(node.parent.content):
+        if index_node is node:
+            current_index = index
+            break
+    else:
+        raise AssertionError('A node was not found within its parent')
+
+    current_index -= 1
+    while current_index >= 0:
+        for other_node in dfs_rtl(node.parent.content[current_index]):
+            yield other_node
+        current_index -= 1
+
+    yield node.parent
+
+    for other_node in walk_left(node.parent):
+        yield other_node
+
+
+def walk_right(node):
+    """Generates nodes towards end of the document, starting after node"""
+    if node.parent is None or not isinstance(node.parent, Group):
+        return
+
+    # Find the current node's position
+    for index, index_node in enumerate(node.parent.content):
+        if index_node is node:
+            current_index = index
+            break
+    else:
+        raise AssertionError('A node was not found within its parent')
+
+    current_index += 1
+    while current_index < len(node.parent.content):
+        for other_node in dfs_ltr(node.parent.content[current_index]):
+            yield other_node
+        current_index += 1
+
+    yield node.parent
+
+    for other_node in walk_right(node.parent):
+        yield other_node
+
+def filter_control_word(nodes, name):
+    for node in nodes:
+        if isinstance(node, TokenNode) and isinstance(node.token, ControlWord):
+            if node.token.word == name:
+                yield node
+
+
+def node_range(start_node, end_node):
+    for node in walk_right(start_node):
+        if node is end_node:
+            return
+        yield node
+
+
+def as_text(nodes):
+    ret = ''
+    for node in nodes:
+        if isinstance(node, Text):
+            ret += node.text
+    return ret
 
 if __name__ == '__main__':
     import sys
