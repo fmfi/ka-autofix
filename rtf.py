@@ -5,6 +5,19 @@ from collections import deque
 from itertools import chain
 
 
+class Error(Exception):
+    pass
+
+
+class ParseError(Error):
+    def __init__(self, position, message):
+        self.position = position
+        self.message = message
+
+    def __str__(self):
+        return 'Parse error at position {}: '.format(self.position, self.message)
+
+
 class PeekIter:
     def __init__(self, iterator):
         self._iterator = iterator
@@ -141,6 +154,8 @@ class GroupBoundary(Token):
 
 
 def tokenize(bs):
+    if not isinstance(bs, ByteStream):
+        bs = ByteStream(bs)
     while True:
         b = bs.peek()
         loop_pos = bs.pos
@@ -163,7 +178,7 @@ def tokenize(bs):
                     word += bs.get()
                     num += 1
                     if num > 32:
-                        raise ValueError('Too long control word')
+                        raise ParseError(bs.pos, 'Too long control word')
                 number = None
                 if bs.peek() == ' ':
                     trailing = bs.get()
@@ -176,7 +191,7 @@ def tokenize(bs):
                     number = int(number.decode('ascii'))
                 if word == b'bin':
                     if number < 0:
-                        raise ValueError('Negative \\bin')
+                        raise ParseError(loop_pos, 'Negative \\bin')
                     skip = number
                     data = b''
                     while skip > 0:
@@ -234,25 +249,6 @@ class TokenNode(Node):
         self.token = token
 
 
-def parse_group(tokens):
-    open_brace = next(tokens)
-    if open_brace != GroupBoundary(opening=True):
-        raise ValueError('Expecting {')
-    group = Group(open_brace.pos)
-    while True:
-        try:
-            token = next(tokens)
-        except StopIteration:
-            raise ValueError('Premature EOF')
-
-        if token == GroupBoundary(opening=True):
-            group.content.append(parse_group(chain([token], tokens)))
-        elif token == GroupBoundary(opening=False):
-            return group
-        else:
-            group.content.append(token)
-
-
 class Scope:
     def __init__(self, group):
         self.group = group
@@ -280,7 +276,7 @@ def parse(tokens, encoding=None):
 
     open_brace = next(tokens)
     if open_brace != GroupBoundary(opening=True):
-        raise ValueError('Expecting {')
+        raise ParseError(open_brace.pos, 'Expecting {')
     root = Group(open_brace.pos)
 
     stack = [Scope(root)]
@@ -321,7 +317,7 @@ def parse(tokens, encoding=None):
                 continue
             elif token.word == b'uc':
                 if token.number is None:
-                    raise ValueError('\\uc requires argument')
+                    raise ParseError(token.pos, '\\uc requires argument')
                 stack[-1].unicode_skip = token.number
             elif token.word == b'ansi':
                 set_encoding('ascii')
@@ -343,7 +339,7 @@ def parse(tokens, encoding=None):
     except StopIteration:
         return root
     else:
-        raise ValueError('Unexpected trailing token {!r}'.format(token))
+        raise ParseError(token.pos, 'Unexpected trailing token {!r}'.format(token))
 
 
 def escape_text_tokens(text, encoding=None):
