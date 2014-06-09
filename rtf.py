@@ -10,12 +10,12 @@ class Error(Exception):
 
 
 class ParseError(Error):
-    def __init__(self, position, message):
+    def __init__(self, position, description):
         self.position = position
-        self.message = message
+        self.description = description
 
     def __str__(self):
-        return 'Parse error at position {}: '.format(self.position, self.message)
+        return 'Parse error at position {}: {}'.format(self.position, self.description)
 
 
 class PeekIter:
@@ -265,6 +265,12 @@ RTF_ENCODINGS = {
 }
 
 
+class Document(Node):
+    def __init__(self, root, trailing=None):
+        self.root = root
+        self.trailing = trailing
+
+
 def parse(tokens, encoding=None):
     tokens = PeekIter(tokens)
     effective_encoding = 'ascii' if encoding is None else encoding
@@ -300,8 +306,12 @@ def parse(tokens, encoding=None):
             if len(stack) == 0:
                 break
         elif isinstance(token, Char):
-            decoded_text = bytes([token.ordinal]).decode(effective_encoding)
-            combine_text(decoded_text, [token])
+            try:
+                decoded_text = bytes([token.ordinal]).decode(effective_encoding)
+            except UnicodeDecodeError:
+                stack[-1].group.content.append(TokenNode(token))
+            else:
+                combine_text(decoded_text, [token])
         elif isinstance(token, ControlWord):
             if token.word == b'u':  # unicode text
                 ordinal = token.number
@@ -334,12 +344,14 @@ def parse(tokens, encoding=None):
         else:
             stack[-1].group.content.append(TokenNode(token))
 
-    try:
-        token = next(tokens)
-    except StopIteration:
-        return root
-    else:
+    trailing = []
+    for token in tokens:
+        if isinstance(token, Separator):
+            trailing.append(token)
+            continue
         raise ParseError(token.pos, 'Unexpected trailing token {!r}'.format(token))
+
+    return Document(root, trailing=trailing)
 
 
 def escape_text_tokens(text, encoding=None):
@@ -389,6 +401,12 @@ def flatten(node, encoding=None):
             tokens = escape_text_tokens(node.text, encoding=encoding)
         for token in tokens:
             yield token
+    elif isinstance(node, Document):
+        for token in flatten(node.root):
+            yield token
+        if node.trailing:
+            for token in node.trailing:
+                yield token
 
 
 if __name__ == '__main__':
