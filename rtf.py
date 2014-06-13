@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from itertools import takewhile
+from io import BytesIO
 import re
 from copy import copy
 from collections import deque
@@ -48,8 +49,11 @@ class PeekIter:
                 return False
         return True
 
+
 class ByteStream:
     def __init__(self, file):
+        if isinstance(file, bytes):
+            file = BytesIO(file)
         self._file = file
         self._buf = b''
         self.pos = 0
@@ -100,6 +104,14 @@ class ControlWord(Token):
         return 'ControlWord({!r}, number={!r}, trailing={!r}, pos={!r})'.format(self.word, self.number,
                                                                                 self.trailing, self.pos)
 
+    def __eq__(self, other):
+        if not isinstance(other, ControlWord):
+            return False
+        return self.word == other.word and self.number == other.number
+
+    def __ne__(self, other):
+        return not self == other
+
 
 class BinaryData(Token):
     def __init__(self, data, pos=None, trailing=None):
@@ -116,6 +128,15 @@ class BinaryData(Token):
         ret += self.data
         return ret
 
+    def __eq__(self, other):
+        if not isinstance(other, BinaryData):
+            return False
+        return self.data == other.data
+
+    def __ne__(self, other):
+        return not self == other
+
+
 class ControlSymbol(Token):
     def __init__(self, symbol, pos=None):
         super().__init__(pos=pos)
@@ -126,6 +147,14 @@ class ControlSymbol(Token):
 
     def __repr__(self):
         return 'ControlSymbol({!r}, pos={!r})'.format(self.symbol, self.pos)
+
+    def __eq__(self, other):
+        if not isinstance(other, ControlSymbol):
+            return False
+        return self.symbol == other.symbol
+
+    def __ne__(self, other):
+        return not self == other
 
 
 class Separator(Token):
@@ -138,6 +167,12 @@ class Separator(Token):
 
     def __repr__(self):
         return 'Separator({!r}, pos={!r})'.format(self.bytes, self.pos)
+
+    def __eq__(self, other):
+        return isinstance(other, Separator)
+
+    def __ne__(self, other):
+        return not self == other
 
 
 class Char(Token):
@@ -269,6 +304,12 @@ class Text(Node):
     def __repr__(self):
         return 'Text({!r}, tokens={!r})'.format(self._text, self.tokens)
 
+    def __eq__(self, other):
+        return self.text == other.text
+
+    def __ne__(self, other):
+        return self.text != other.text
+
 
 RTF_DESTINATIONS = {
     b'aftncn', b'aftnsep', b'aftnsepc', b'annotation', b'atnauthor', b'atndate',
@@ -362,6 +403,12 @@ class Group(Node):
             destination = self.content[pos]
         return destination, invisible
 
+    def __eq__(self, other):
+        return self.content == other.content
+
+    def __ne__(self, other):
+        return self.content != other.content
+
 
 class TokenNode(Node):
     def __init__(self, token, parent=None):
@@ -370,6 +417,12 @@ class TokenNode(Node):
 
     def __repr__(self):
         return 'TokenNode({!r})'.format(self.token)
+
+    def __eq__(self, other):
+        return isinstance(other, TokenNode) and self.token == other.token
+
+    def __ne__(self, other):
+        return not isinstance(other, TokenNode) or self.token != other.token
 
 
 class Scope:
@@ -396,6 +449,12 @@ class Document(Node):
 
     def walk(self):
         return self.root.walk()
+
+    def __eq__(self, other):
+        return self.root == other.root
+
+    def __ne__(self, other):
+        return self.root != other.root
 
 
 def parse(tokens, encoding=None):
