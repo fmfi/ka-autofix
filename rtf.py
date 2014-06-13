@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from itertools import takewhile
 import re
 from copy import copy
 from collections import deque
@@ -19,8 +20,8 @@ class ParseError(Error):
 
 
 class PeekIter:
-    def __init__(self, iterator):
-        self._iterator = iterator
+    def __init__(self, iterable):
+        self._iterator = iter(iterable)
         self._buf = deque()
 
     def __iter__(self):
@@ -39,6 +40,13 @@ class PeekIter:
                 return None
         return self._buf[index]
 
+    def has_next(self, index=0):
+        while len(self._buf) <= index:
+            try:
+                self._buf.append(next(self._iterator))
+            except StopIteration:
+                return False
+        return True
 
 class ByteStream:
     def __init__(self, file):
@@ -262,6 +270,59 @@ class Text(Node):
         return 'Text({!r}, tokens={!r})'.format(self._text, self.tokens)
 
 
+RTF_DESTINATIONS = {
+    b'aftncn', b'aftnsep', b'aftnsepc', b'annotation', b'atnauthor', b'atndate',
+    b'atnicn', b'atnid', b'atnparent', b'atnref', b'atntime', b'atrfend',
+    b'atrfstart', b'author', b'background', b'bkmkend', b'bkmkstart', b'blipuid',
+    b'buptim', b'category', b'colorschememapping', b'colortbl', b'comment',
+    b'company', b'creatim', b'datafield', b'datastore', b'defchp', b'defpap', b'do',
+    b'doccomm', b'docvar', b'dptxbxtext', b'ebcend', b'ebcstart', b'factoidname',
+    b'falt', b'fchars', b'ffdeftext', b'ffentrymcr', b'ffexitmcr', b'ffformat',
+    b'ffhelptext', b'ffl', b'ffname', b'ffstattext', b'field', b'file', b'filetbl',
+    b'fldinst', b'fldrslt', b'fname', b'fontemb', b'fontfile', b'fonttbl',
+    b'footer', b'footerf', b'footerl', b'footerr', b'footnote', b'formfield',
+    b'ftncn', b'ftnsep', b'ftnsepc', b'g', b'generator', b'gridtbl', b'header',
+    b'headerf', b'headerl', b'headerr', b'hl', b'hlfr', b'hlinkbase', b'hlloc',
+    b'hlsrc', b'hsv', b'htmltag', b'info', b'keycode', b'keywords', b'latentstyles',
+    b'lchars', b'levelnumbers', b'leveltext', b'lfolevel', b'linkval', b'list',
+    b'listlevel', b'listname', b'listoverride', b'listoverridetable',
+    b'listpicture', b'liststylename', b'listtable', b'listtext', b'lsdlockedexcept',
+    b'manager', b'mhtmltag', b'mmaddfieldname', b'mmconnectstr',
+    b'mmconnectstrdata', b'mmdatasource', b'mmheadersource', b'mmmailsubject',
+    b'mmodso', b'mmodsofilter', b'mmodsofldmpdata', b'mmodsosort', b'mmodsosrc ',
+    b'mmodsotable', b'mmodsoudl', b'mmodsoudldata 200', b'mmquery', b'mvfmf',
+    b'mvfml', b'mvtof', b'mvtol', b'nesttableprops', b'nextfile', b'nonesttables',
+    b'objalias', b'objclass', b'objdata', b'object', b'objname', b'objsect',
+    b'objtime', b'oldcprops', b'oldpprops', b'oldsprops', b'oldtprops', b'oleclsid',
+    b'operator', b'panose', b'password', b'passwordhash', b'pgp', b'pgptbl',
+    b'picprop', b'pict', b'pn', b'pntext', b'pntxta', b'pntxtb', b'printim',
+    b'private', b'propname', b'protend', b'protstart', b'protusertbl', b'pxe',
+    b'result', b'revtbl', b'revtim', b'rsidtbl', b'rtf', b'rxe', b'shp', b'shpgrp',
+    b'shpinst', b'shppict', b'shprslt', b'shptxt', b'sn', b'sp', b'staticval',
+    b'stylesheet', b'subject', b'sv', b'svb', b'tc', b'template', b'themedata',
+    b'title', b'txe', b'ud', b'upr', b'userprops', b'wgrffmtfilter',
+    b'windowcaption', b'writereservation', b'writereservhash', b'xe', b'xform',
+    b'xmlattrname', b'xmlattrvalue', b'xmlclose', b'xmlname', b'xmlnstbl',
+    b'xmlopen', b'macc', b'maccPr', b'mailmerge', b'maln', b'malnScr', b'margPr',
+    b'mbar', b'mbarPr', b'mbaseJc', b'mbegChr', b'mborderBox', b'mborderBoxPr',
+    b'mbox', b'mboxPr', b'mchr', b'mcount', b'mctrlPr', b'md', b'mdeg', b'mdegHide',
+    b'mden', b'mdiff', b'mdPr', b'me 2', b'mendChr', b'meqArr', b'meqArrPr', b'mf',
+    b'mfName', b'mfPr', b'mfunc', b'mfuncPr', b'mgroupChr', b'mgroupChrPr',
+    b'mgrow', b'mhideBot', b'mhideLeft', b'mhideRight', b'mhideTop', b'mlim',
+    b'mlimloc', b'mlimlow', b'mlimlowPr', b'mlimupp', b'mlimuppPr', b'mm', b'mmath',
+    b'mmathPict', b'mmathPr', b'mmaxdist', b'mmc', b'mmcJc', b'mmcPr', b'mmcs',
+    b'mmodsoname', b'mmodsorecipdata', b'mmodsouniquetag', b'mmPr', b'mmr',
+    b'mnary', b'mnaryPr', b'mnoBreak', b'mnum', b'mobjDist', b'moMath',
+    b'moMathPara', b'moMathParaPr', b'mopEmu', b'mphant', b'mphantPr', b'mplcHide',
+    b'mpos', b'mr', b'mrad', b'mradPr', b'mrPr', b'msepChr', b'mshow', b'mshp',
+    b'msPre', b'msPrePr', b'msSub', b'msSubPr', b'msSubSup', b'msSubSupPr',
+    b'msSup', b'msSupPr', b'mstrikeBLTR', b'mstrikeH', b'mstrikeTLBR', b'mstrikeV',
+    b'msub', b'msubHide', b'msup', b'msupHide', b'mtransp', b'mtype', b'mvertJc',
+    b'mzeroAsc', b'mzeroDesc', b'mzeroWid', b'mmodsomappedname', b'fldtype',
+    b'pnseclvl',
+}
+
+
 class Group(Node):
     def __init__(self, pos=None, parent=None):
         super().__init__(parent=parent)
@@ -282,6 +343,24 @@ class Group(Node):
             raise ValueError('A node can only be inserted once')
         node.parent = self
         self.content.append(node)
+
+    @property
+    def destination(self):
+        invisible = False
+        destination = None
+        if len(self.content) == 0:
+            return destination, invisible
+        pos = 0
+        if (isinstance(self.content[0], TokenNode) and isinstance(self.content[0].token, ControlSymbol) and
+                self.content[0].token.symbol == b'*'):
+            invisible = True
+            pos += 1
+        if len(self.content) <= pos:
+            return destination, invisible
+        if (isinstance(self.content[pos], TokenNode) and isinstance(self.content[pos].token, ControlWord) and
+                self.content[pos].token.word in RTF_DESTINATIONS):
+            destination = self.content[pos]
+        return destination, invisible
 
 
 class TokenNode(Node):
@@ -389,6 +468,15 @@ def parse(tokens, encoding=None):
                 else:
                     set_encoding('cp{}'.format(token.number))
             stack[-1].group.append(TokenNode(token))
+        elif isinstance(token, ControlSymbol):
+            if token.symbol == b'~':
+                combine_text(' ', [token])
+            elif token.symbol == b'-':
+                combine_text('­', [token])
+            elif token.symbol == b'_':
+                combine_text('‑', [token])
+            else:
+                stack[-1].group.append(TokenNode(token))
         else:
             stack[-1].group.append(TokenNode(token))
 
@@ -411,6 +499,12 @@ def escape_text_tokens(text, encoding=None):
             pass
         elif c in '\\{}':
             yield ControlSymbol(c.encode('ascii'))
+        elif c == ' ': # non-breaking space
+            yield ControlSymbol(b'~')
+        elif c == '­': # soft hyphen
+            yield ControlSymbol(b'-')
+        elif c == '‑': # non-breaking hyphen
+            yield ControlSymbol(b'_')
         elif c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 :;@/()_-?.,"\'=&%+[]*':
             yield RawChar(c.encode('ascii'))
         else:
@@ -541,11 +635,26 @@ def walk_right(node):
     for other_node in walk_right(node.parent):
         yield other_node
 
-def filter_control_word(nodes, name):
-    for node in nodes:
-        if isinstance(node, TokenNode) and isinstance(node.token, ControlWord):
-            if node.token.word == name:
-                yield node
+_not_specified = object()
+
+
+def match_control_word(name, number=_not_specified):
+    def matcher(node):
+        if not isinstance(node, TokenNode):
+            return False
+        if not isinstance(node.token, ControlWord):
+            return False
+        if node.token.word != name:
+            return False
+        if number is not _not_specified:
+            if number != node.token.number:
+                return False
+        return True
+    return matcher
+
+
+def filter_control_word(nodes, *args, **kwargs):
+    return filter(match_control_word(*args, **kwargs), nodes)
 
 
 def node_range(start_node, end_node):
@@ -560,7 +669,44 @@ def as_text(nodes):
     for node in nodes:
         if isinstance(node, Text):
             ret += node.text
+        elif isinstance(node, Group):
+            ret += as_text(node.content)
     return ret
+
+
+def document_content(node):
+    if isinstance(node, Group):
+        destination, invisible = node.destination
+        if destination is not None:
+            if destination.token.word in (b'colortbl', b'fonttbl', b'stylesheet', b'themedata',
+                                          b'header', b'headerl', b'headerr', b'headerf',
+                                          b'footer', b'footerl', b'footerr', b'footerf',
+                                          b'footnote', b'info', b'mmathPr'):
+                return
+            if invisible:
+                return
+        for child in node.content:
+            for child_node in document_content(child):
+                yield child_node
+    else:
+        yield node
+
+
+def split_by(nodes, matcher):
+    nodes = PeekIter(nodes)
+    while nodes.has_next():
+        yield takewhile(lambda x: not matcher(x), nodes)
+
+
+def split_end_by(nodes, matcher):
+    item = []
+    for node in nodes:
+        if matcher(node):
+            yield item
+            item = []
+        else:
+            item.append(node)
+
 
 if __name__ == '__main__':
     import sys

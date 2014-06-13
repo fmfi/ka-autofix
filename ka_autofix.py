@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from rtf import ByteStream, flatten, parse, tokenize, walk_left, find_text, filter_control_word, node_range, walk_right, \
-    as_text
+    as_text, dfs_ltr, document_content, match_control_word, split_by, split_end_by
 
 
 def print_iterator(iterator):
@@ -30,16 +30,12 @@ def check_rtf(path, handler=None):
 
 
 def check_formular_sp(path, document):
-    for node in find_text(document.root, 'I.18'):
-        row_start = next(filter_control_word(walk_left(node), b'trowd'), None)
-        cell_end = next(filter_control_word(walk_right(node), b'cell'), None)
-        text = as_text(node_range(row_start, cell_end))
+    for row in split_by(document_content(document.root), match_control_word(b'row')):
+        for cell in split_end_by(row, match_control_word(b'cell')):
+            print(repr(as_text(cell)))
+        print()
 
-        if not text.startswith('I.18'):
-            continue
 
-        if text != 'I.18 Typ žiadosti':
-            print('{}: Chyba polozka I.18'.format(path), file=sys.stderr)
 
 if __name__ == '__main__':
     import sys
