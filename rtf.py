@@ -59,23 +59,23 @@ class ByteStream:
         self.pos = 0
 
     def _readbuf(self):
-        if len(self._buf) == 0:
-            self._buf += self._file.read(1024)
+        if self.pos == len(self._buf):
+            self._buf = self._file.read(1024)
+            self.pos = 0
 
     def get(self):
         self._readbuf()
-        if len(self._buf) == 0:
+        if self.pos == len(self._buf):
             return b''
-        ret = self._buf[0:1]
-        self._buf = self._buf[1:]
+        ret = self._buf[self.pos:self.pos+1]
         self.pos += 1
         return ret
 
     def peek(self):
         self._readbuf()
-        if len(self._buf) == 0:
+        if self.pos == len(self._buf):
             return b''
-        return self._buf[0:1]
+        return self._buf[self.pos:self.pos+1]
 
 
 class Token:
