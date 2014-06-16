@@ -1,26 +1,42 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -*- coding: ascii -*-
+from __future__ import print_function
 from itertools import takewhile
 from io import BytesIO
 import re
 from copy import copy
 from collections import deque
+import sys
+from six import u, Iterator, PY2, byte2int, unichr, int2byte
+
+
+# https://docs.python.org/3/howto/pyporting.html#str-unicode
+class UnicodeMixin(object):
+    """Mixin class to handle defining the proper __str__/__unicode__
+    methods in Python 2 or 3."""
+
+    if sys.version_info[0] >= 3:  # Python 3
+        def __str__(self):
+            return self.__unicode__()
+    else:  # Python 2
+        def __str__(self):
+            return self.__unicode__().encode('utf8')
 
 
 class Error(Exception):
     pass
 
 
-class ParseError(Error):
+class ParseError(Error, UnicodeMixin):
     def __init__(self, position, description):
         self.position = position
         self.description = description
 
-    def __str__(self):
-        return 'Parse error at position {}: {}'.format(self.position, self.description)
+    def __unicode__(self):
+        return u('Parse error at position {}: {}').format(self.position, self.description)
 
 
-class PeekIter:
+class PeekIter(Iterator):
     def __init__(self, iterable):
         self._iterator = iter(iterable)
         self._buf = deque()
@@ -50,7 +66,23 @@ class PeekIter:
         return True
 
 
-class ByteStream:
+def ascii_as_bytes(s):
+    if PY2:
+        return s
+    return s.decode('ascii')
+
+
+def ascii_as_str(s):
+    if PY2:
+        return s
+    return s.decode('ascii')
+
+
+def number_as_bytes(num):
+    return ascii_as_bytes(str(num))
+
+
+class ByteStream(object):
     def __init__(self, file):
         if isinstance(file, bytes):
             file = BytesIO(file)
@@ -78,14 +110,14 @@ class ByteStream:
         return self._buf[self.pos:self.pos+1]
 
 
-class Token:
+class Token(object):
     def __init__(self, pos=None):
         self.pos = pos
 
 
 class ControlWord(Token):
     def __init__(self, word, number=None, pos=None, trailing=None):
-        super().__init__(pos=pos)
+        super(ControlWord, self).__init__(pos=pos)
         self.word = word
         self.number = number
         if trailing is None:
@@ -96,7 +128,7 @@ class ControlWord(Token):
     def __bytes__(self):
         ret = b'\\' + self.word
         if self.number is not None:
-            ret += str(self.number).encode('ascii')
+            ret += number_as_bytes(self.number)
         ret += self.trailing
         return ret
 
@@ -123,7 +155,7 @@ class BinaryData(Token):
 
     def __bytes__(self):
         ret = b'\\bin'
-        ret += str(len(self.data)).encode('ascii')
+        ret += number_as_bytes(len(self.data))
         ret += self.trailing
         ret += self.data
         return ret
@@ -139,7 +171,7 @@ class BinaryData(Token):
 
 class ControlSymbol(Token):
     def __init__(self, symbol, pos=None):
-        super().__init__(pos=pos)
+        super(ControlSymbol, self).__init__(pos=pos)
         self.symbol = symbol
 
     def __bytes__(self):
@@ -159,7 +191,7 @@ class ControlSymbol(Token):
 
 class Separator(Token):
     def __init__(self, bytes, pos=None):
-        super().__init__(pos=pos)
+        super(Separator, self).__init__(pos=pos)
         self.bytes = bytes
 
     def __bytes__(self):
@@ -177,7 +209,7 @@ class Separator(Token):
 
 class Char(Token):
     def __init__(self, ordinal, pos=None):
-        super().__init__(pos=pos)
+        super(Char, self).__init__(pos=pos)
         self.ordinal = ordinal
 
     def __repr__(self):
@@ -186,17 +218,17 @@ class Char(Token):
 
 class RawChar(Char):
     def __bytes__(self):
-        return chr(self.ordinal).encode('ascii')
+        return int2byte(self.ordinal)
 
 
 class ANSIEscapedChar(Char):
     def __bytes__(self):
-        return b'\\\'' + hex(self.ordinal)[2:].zfill(2).encode('ascii')
+        return b'\\\'' + ascii_as_bytes(hex(self.ordinal)[2:].zfill(2))
 
 
 class GroupBoundary(Token):
     def __init__(self, opening=True, pos=None):
-        super().__init__(pos=pos)
+        super(GroupBoundary, self).__init__(pos=pos)
         self.opening = opening
 
     def __bytes__(self):
@@ -247,7 +279,7 @@ def tokenize(bs):
                         number += bs.get()
                     if bs.peek() == b' ':
                         trailing = bs.get()
-                    number = int(number.decode('ascii'))
+                    number = int(ascii_as_str(number))
                 if word == b'bin':
                     if number < 0:
                         raise ParseError(loop_pos, 'Negative \\bin')
@@ -270,10 +302,10 @@ def tokenize(bs):
                 sep += bs.get()
             yield Separator(sep, pos=loop_pos)
         else:
-            yield RawChar(ord(bs.get().decode('ascii')), pos=loop_pos)
+            yield RawChar(byte2int(bs.get()), pos=loop_pos)
 
 
-class Node:
+class Node(object):
     def __init__(self, parent=None):
         self.parent = parent
 
@@ -283,7 +315,7 @@ class Node:
 
 class Text(Node):
     def __init__(self, text, tokens=None, parent=None):
-        super().__init__(parent=parent)
+        super(Text, self).__init__(parent=parent)
         self.tokens = tokens
         self._text = text
 
@@ -365,9 +397,12 @@ RTF_DESTINATIONS = {
 
 
 class Group(Node):
-    def __init__(self, pos=None, parent=None):
-        super().__init__(parent=parent)
-        self.content = []
+    def __init__(self, content=None, pos=None, parent=None):
+        super(Group, self).__init__(parent=parent)
+        if content is None:
+            self.content = []
+        else:
+            self.content = content
         self.pos = pos
 
     def __bytes__(self):
@@ -409,10 +444,13 @@ class Group(Node):
     def __ne__(self, other):
         return self.content != other.content
 
+    def __repr__(self):
+        return '<Group {!r}>'.format(self.content)
+
 
 class TokenNode(Node):
     def __init__(self, token, parent=None):
-        super().__init__(parent=parent)
+        super(TokenNode, self).__init__(parent=parent)
         self.token = token
 
     def __repr__(self):
@@ -425,7 +463,7 @@ class TokenNode(Node):
         return not isinstance(other, TokenNode) or self.token != other.token
 
 
-class Scope:
+class Scope(object):
     def __init__(self, group):
         self.group = group
         self.unicode_skip = 1
@@ -443,7 +481,7 @@ RTF_ENCODINGS = {
 
 class Document(Node):
     def __init__(self, root, trailing=None):
-        super().__init__(parent=None)
+        super(Document, self).__init__(parent=None)
         self.root = root
         self.trailing = trailing
 
@@ -456,20 +494,23 @@ class Document(Node):
     def __ne__(self, other):
         return self.root != other.root
 
+    def __repr__(self):
+        return 'Document({!r}, trailing={!r})'.format(self.root, self.trailing)
+
 
 def parse(tokens, encoding=None):
     tokens = PeekIter(tokens)
-    effective_encoding = 'ascii' if encoding is None else encoding
+    effective = type("", (), {})()  # http://stackoverflow.com/a/7935984
+    effective.encoding = 'ascii' if encoding is None else encoding
 
     def set_encoding(name):
-        nonlocal effective_encoding
         if encoding is None:
-            effective_encoding = name
+            effective.encoding = name
 
     open_brace = next(tokens)
     if open_brace != GroupBoundary(opening=True):
         raise ParseError(open_brace.pos, 'Expecting {')
-    root = Group(open_brace.pos)
+    root = Group(pos=open_brace.pos)
 
     stack = [Scope(root)]
 
@@ -484,7 +525,7 @@ def parse(tokens, encoding=None):
     for token in tokens:
         if token == GroupBoundary(opening=True):
             new_scope = copy(stack[-1])
-            new_scope.group = Group(token.pos)
+            new_scope.group = Group(pos=token.pos)
             stack[-1].group.append(new_scope.group)
             stack.append(new_scope)
         elif token == GroupBoundary(opening=False):
@@ -493,7 +534,7 @@ def parse(tokens, encoding=None):
                 break
         elif isinstance(token, Char):
             try:
-                decoded_text = bytes([token.ordinal]).decode(effective_encoding)
+                decoded_text = unichr(token.ordinal)
             except UnicodeDecodeError:
                 stack[-1].group.append(TokenNode(token))
             else:
@@ -509,7 +550,7 @@ def parse(tokens, encoding=None):
                     if isinstance(to_skip, GroupBoundary):
                         break
                     skipped_tokens.append(next(tokens))
-                combine_text(chr(ordinal), skipped_tokens)
+                combine_text(unichr(ordinal), skipped_tokens)
                 continue
             elif token.word == b'uc':
                 if token.number is None:
@@ -529,11 +570,11 @@ def parse(tokens, encoding=None):
             stack[-1].group.append(TokenNode(token))
         elif isinstance(token, ControlSymbol):
             if token.symbol == b'~':
-                combine_text(' ', [token])
+                combine_text('\u00a0', [token])
             elif token.symbol == b'-':
-                combine_text('­', [token])
+                combine_text('\u00ad', [token])
             elif token.symbol == b'_':
-                combine_text('‑', [token])
+                combine_text('\u2011', [token])
             else:
                 stack[-1].group.append(TokenNode(token))
         else:
@@ -557,12 +598,12 @@ def escape_text_tokens(text, encoding=None):
         elif (c == '\n' and prevc == '\r') or (c == '\r' and prevc == '\n'):
             pass
         elif c in '\\{}':
-            yield ControlSymbol(c.encode('ascii'))
-        elif c == ' ': # non-breaking space
+            yield ControlSymbol(ascii_as_bytes(c))
+        elif c == u('\u00a0'): # non-breaking space
             yield ControlSymbol(b'~')
-        elif c == '­': # soft hyphen
+        elif c == u('\u00ad'): # soft hyphen
             yield ControlSymbol(b'-')
-        elif c == '‑': # non-breaking hyphen
+        elif c == u('\u2011'): # non-breaking hyphen
             yield ControlSymbol(b'_')
         elif c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 :;@/()_-?.,"\'=&%+[]*':
             yield RawChar(c.encode('ascii'))
