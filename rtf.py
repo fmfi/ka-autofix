@@ -534,7 +534,9 @@ def parse(tokens, encoding=None):
                 break
         elif isinstance(token, Char):
             try:
-                decoded_text = unichr(token.ordinal)
+                ba = bytearray()
+                ba.append(token.ordinal)
+                decoded_text = ba.decode(effective.encoding)
             except UnicodeDecodeError:
                 stack[-1].group.append(TokenNode(token))
             else:
