@@ -7,11 +7,14 @@ from enum import Enum
 
 RE_TITULY = r'(?:Bc|Mgr|PhD|Ing)'
 RE_SP = r'SP_\d+(?:[.]\d+)*_' + RE_TITULY + r'(?:_' + RE_TITULY + r')*_[a-zA-Z0-9_-]+'
+RE_SUBOR = r'[a-zA-Z0-9_.-]+'
 
 PAT_SP_DIR = re.compile('^{}$'.format(RE_SP))
 PAT_SP_FORM = re.compile('^2a_{}.rtf$'.format(RE_SP))
 PAT_SP_FORM_PERMISSIVE = re.compile(r'.*2a_SP.*rtf$', re.IGNORECASE)
-PAT_SUBOR = re.compile(r'^[a-zA-Z0-9_.-]+$')
+PAT_SUBOR = re.compile(r'^{}$'.format(RE_SUBOR))
+PAT_IL_FORM = re.compile('^IL_PREDMETU_{}.rtf$'.format(RE_SUBOR))
+PAT_VPCH_FORM = re.compile('^VPCH_{}.rtf$'.format(RE_SUBOR))
 
 class MessageType(Enum):
     error = 1
@@ -100,6 +103,10 @@ def process_sp_dir(messages, sp_dir_path, nazov_sp=None):
             process_sp_form(messages, path, nazov_sp=nazov_sp)
             pocet_formularov_sp += 1
         else:
+            if PAT_IL_FORM.match(name):
+                pocet_formularov_il += 1
+            elif PAT_VPCH_FORM.match(name):
+                pocet_formularov_vpch += 1
             process_generic_file(messages, path)
 
     if pocet_formularov_sp == 0:
@@ -127,7 +134,6 @@ def process_generic_file(messages, path):
     name = os.path.basename(path)
     if not PAT_SUBOR.match(name):
         messages.add('nazov suboru obsahuje nepovolene znaky', path=path)
-
 
 
 def guess_path_type(path):
